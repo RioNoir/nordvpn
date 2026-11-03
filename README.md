@@ -1,119 +1,128 @@
-# ⚠️ THIS REPOSITORY IS NOT MAINTAINED ⚠️
-
-**I recommend switching to use [github.com/qdm12/gluetun](https://github.com/qdm12/gluetun) instead.**
-
----
-
 <p align="center">
-    <a href="https://nordvpn.com/"><img src="https://github.com/bubuntux/nordvpn/raw/master/.img/NordVpn_logo.png"/></a>
-    </br>
-    <a href="https://github.com/bubuntux/nordvpn/blob/master/LICENSE"><img src="https://badgen.net/github/license/bubuntux/nordvpn?color=cyan"/></a>
-    <a href="https://cloud.docker.com/u/bubuntux/repository/docker/bubuntux/nordvpn"><img src="https://badgen.net/docker/size/bubuntux/nordvpn?icon=docker&label=size"/></a>
-    <a href="https://cloud.docker.com/u/bubuntux/repository/docker/bubuntux/nordvpn"><img src="https://badgen.net/docker/pulls/bubuntux/nordvpn?icon=docker&label=pulls"/></a>
-    <a href="https://cloud.docker.com/u/bubuntux/repository/docker/bubuntux/nordvpn"><img src="https://badgen.net/docker/stars/bubuntux/nordvpn?icon=docker&label=stars"/></a>
-    <a href="https://github.com/bubuntux/nordvpn"><img src="https://badgen.net/github/forks/bubuntux/nordvpn?icon=github&label=forks&color=black"/></a>
-    <a href="https://github.com/bubuntux/nordvpn"><img src="https://badgen.net/github/stars/bubuntux/nordvpn?icon=github&label=stars&color=black"/></a>
-    <a href="https://github.com/bubuntux/nordvpn/actions/workflows/deploy.yml"><img src="https://github.com/bubuntux/nordvpn/actions/workflows/deploy.yml/badge.svg?branch=master"/></a>
+    <a href="https://nordvpn.com/"><img src="https://github.com/RioNoir/nordvpn/raw/master/.img/NordVpn_logo.png"/></a>
+    <br/>
+    <a href="https://github.com/RioNoir/nordvpn/blob/master/LICENSE"><img src="https://badgen.net/github/license/RioNoir/nordvpn?color=cyan"/></a>
+    <a href="https://github.com/RioNoir/nordvpn/actions/workflows/deploy.yml"><img src="https://github.com/RioNoir/nordvpn/actions/workflows/deploy.yml/badge.svg?branch=master"/></a>
+    <a href="https://github.com/RioNoir/nordvpn/pkgs/container/nordvpn"><img src="https://badgen.net/badge/icon/ghcr.io?icon=docker&label=image"/></a>
+    <a href="https://github.com/RioNoir/nordvpn"><img src="https://badgen.net/github/stars/RioNoir/nordvpn?icon=github&label=stars&color=black"/></a>
 </p>
 
-Official `NordVPN` client in a docker container; it makes routing traffic through the `NordVPN` network easy and secure with an integrated iptables kill switch.
+# NordVPN in Docker
 
-# How to use this image
-This container was designed to be started first to provide a connection to other containers (using `--net=container:vpn`, see below *Starting an NordVPN client instance*).
+The official [NordVPN Linux client](https://github.com/NordSecurity/nordvpn-linux) packaged in a container.
+Start it first, then route any other container through it: all traffic leaves via NordVPN, and an
+iptables **kill switch** blocks everything else, even before the tunnel is up.
 
-**NOTE**: More than the basic privileges are needed for NordVPN. With Docker 1.2 or newer, Podman, Kubernetes, etc. you can use the `--cap-add=NET_ADMIN,NET_RAW` option. Earlier versions, or with fig, and you'll have to run it in privileged mode.
+| Component      | Version                                    |
+| -------------- | ------------------------------------------ |
+| NordVPN client | **6.0.2**                                  |
+| Base image     | `linuxserver/baseimage-ubuntu:resolute` (Ubuntu 26.04 LTS, s6-overlay v3) |
+| Architectures  | `linux/amd64`, `linux/arm64`               |
 
-## Starting an NordVPN instance
-    docker run -ti --cap-add=NET_ADMIN --cap-add=NET_RAW --name vpn \
-               -e TOKEN=f6f2bb45... \
-               -e TECHNOLOGY=NordLynx -d ghcr.io/bubuntux/nordvpn
+> This is a maintained fork of [bubuntux/nordvpn](https://github.com/bubuntux/nordvpn), which is no longer maintained.
 
-Once it's up other containers can be started using its network connection:
+## Contents
 
-    docker run -it --net=container:vpn -d other/docker-container
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Docker Compose](#docker-compose)
+- [Environment variables](#environment-variables)
+- [Upgrading from the 4.x image](#upgrading-from-the-4x-image)
+- [Useful commands](#useful-commands)
+- [Troubleshooting](#troubleshooting)
+- [Building the image](#building-the-image)
 
-## docker-compose example
+## Requirements
+
+- A NordVPN subscription and an **access token**. Create one in [Nord Account](https://my.nordaccount.com/) →
+  *NordVPN* → *Manual setup* → *Generate new token*.
+- The `NET_ADMIN` and `NET_RAW` capabilities. The container builds its own firewall and network
+  interfaces. Without them it refuses to route any traffic.
+- A Linux host kernel with WireGuard (NordLynx) support. Any kernel from 5.6 onwards has it built in.
+
+## Quick start
+
+```sh
+docker run -d --name vpn \
+  --cap-add=NET_ADMIN --cap-add=NET_RAW \
+  -e TOKEN=f6f2bb45... \
+  -e CONNECT=Italy \
+  ghcr.io/rionoir/nordvpn
 ```
-version: "3"
+
+Attach other containers to its network stack:
+
+```sh
+docker run -d --net=container:vpn other/image
+```
+
+Check that it works:
+
+```sh
+docker exec vpn nordvpn status
+docker run --rm --net=container:vpn curlimages/curl -s https://api.ipify.org
+```
+
+## Docker Compose
+
+### Basic: a service behind the VPN, reachable from the LAN
+
+Every port published by services behind the VPN has to be declared on the `vpn` service.
+
+```yaml
 services:
   vpn:
-    image: ghcr.io/bubuntux/nordvpn
+    image: ghcr.io/rionoir/nordvpn
+    container_name: vpn
     cap_add:
-      - NET_ADMIN               # Required
-      - NET_RAW                 # Required
-    environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
-      - TOKEN=f6f2bb45...     # Required
-      - CONNECT=United_States
-      - TECHNOLOGY=NordLynx
-      - NETWORK=192.168.1.0/24  # So it can be accessed within the local network
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - TOKEN=f6f2bb45...            # required (or TOKENFILE)
+      - CONNECT=Italy
+      - PROTOCOL=nordlynx
+      - NET_LOCAL=192.168.1.0/24     # let your LAN reach the services
     ports:
-      - 8080:8080
+      - 8080:8080                    # qBittorrent web UI
     sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1  # Recomended if using ipv4 only
+      - net.ipv6.conf.all.disable_ipv6=1   # recommended for IPv4-only setups
+    restart: unless-stopped
+
   torrent:
     image: ghcr.io/linuxserver/qbittorrent
     network_mode: service:vpn
     depends_on:
-      - vpn
-      
-# The torrent service would be available at http://localhost:8080/ 
-# or anywhere inside of the local network http://192.168.1.xxx:8080
- ```
-
-## docker-compose example using reverse proxy
-```
-version: "3"
-services:
-  proxy:
-    image: traefik:v2.4         # Review traefik documentation https://doc.traefik.io/traefik/ 
-    container_name: traefik
-    command:
-      - --api.insecure=true
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-    ports:
-      - 80:80
-      - 8080:8080
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      vpn:
+        condition: service_healthy
     restart: unless-stopped
-  vpn:
-    image: ghcr.io/bubuntux/nordvpn
-    container_name: vpn
-    cap_add:
-      - NET_ADMIN               # Required
-      - NET_RAW                 # Required
-    environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
-      - TOKEN=f6f2bb45...       # Required
-      - CONNECT=United_States
-      - TECHNOLOGY=NordLynx
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1  # Recomended if using ipv4 only
-  torrent:
-    image: ghcr.io/linuxserver/qbittorrent
-    network_mode: container:vpn
-    labels:
-      - traefik.enable=true
-      - traefik.http.services.torrent.loadbalancer.server.port=8080
-      - traefik.http.routers.torrent.rule=Host(`custom-host`)
-    depends_on:
-      - vpn
-      
-# Make sure that custom-host resolves to the ip address of the server 
-# for example /etc/hosts contains 127.0.0.1  custom-host
-# the torrent service would be available at http://custom-host
 ```
 
-## docker-compose example using reverse proxy with TLS
-```
-version: "3"
+The web UI is then available at `http://localhost:8080` or `http://<host-ip>:8080` from the LAN.
+
+### Token from a Docker secret
+
+```yaml
 services:
-  proxy:
-    image: traefik:v2.4             # Review traefik documentation https://doc.traefik.io/traefik/ 
-    container_name: traefik
+  vpn:
+    image: ghcr.io/rionoir/nordvpn
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      - TOKENFILE=/run/secrets/nordvpn_token
+    secrets:
+      - nordvpn_token
+
+secrets:
+  nordvpn_token:
+    file: ./nordvpn_token.txt
+```
+
+### Behind a Traefik reverse proxy with HTTPS
+
+```yaml
+services:
+  traefik:
+    image: traefik:v3
     command:
-      - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
@@ -121,101 +130,149 @@ services:
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls.certresolver=letsencrypt
       - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
-      - --certificatesresolvers.letsencrypt.acme.email=my@email.com # Replace with your email
+      - --certificatesresolvers.letsencrypt.acme.email=you@example.com
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
     ports:
       - 80:80
       - 443:443
-      - 8080:8080
     volumes:
       - ./letsencrypt:/letsencrypt
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
-  domain:
-    image: ghcr.io/linuxserver/duckdns   # Review doc https://github.com/linuxserver/docker-duckdns
-    container_name: duckdns
-    environment:
-      - TOKEN=ABCDFEG                    # Required
-      - SUBDOMAINS=domain1,domain2       # Required
-    restart: unless-stopped
-  media:
-    image: ghcr.io/linuxserver/plex
-    container_name: plex
-    labels:
-      - traefik.enable=true
-      - traefik.http.services.media.loadbalancer.server.port=32400
-      - traefik.http.routers.media.rule=Host(`myplex.duckdns.org`)   # Replace with your domain
-    devices:
-      - /dev/dri:/dev/dri
-    restart: unless-stopped
+
   vpn:
-    image: ghcr.io/bubuntux/nordvpn
-    container_name: nordvpn
-    cap_add:
-      - NET_ADMIN               # Required
-      - NET_RAW                 # Required
-    environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
-      - TOKEN=f6f2bb45...       # Required
-      - CONNECT=United_States
-      - TECHNOLOGY=NordLynx
-      - WHITELIST=showrss.info,rarbg.to,yts.mx
-     sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1  # Recomended if using ipv4 only
+    image: ghcr.io/rionoir/nordvpn
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      - TOKEN=f6f2bb45...
+      - CONNECT=Italy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    restart: unless-stopped
+
   torrent:
     image: ghcr.io/linuxserver/qbittorrent
-    container_name: qbittorrent
     network_mode: service:vpn
     depends_on:
-      - vpn
+      vpn:
+        condition: service_healthy
     labels:
       - traefik.enable=true
+      - traefik.http.routers.torrent.rule=Host(`torrent.example.com`)
       - traefik.http.services.torrent.loadbalancer.server.port=8080
-      - traefik.http.routers.torrent.rule=Host(`mytorrent.duckdns.org`) # Replace with your domain
     restart: unless-stopped
-    
-# Make sure that you can access your server from the internet
-# for example configure dmz on your router
-# the torrent service would be available at https://mytorrent.duckdns.org
 ```
 
-# ENVIRONMENT VARIABLES
+Traefik reaches the services through the Docker network, which the container automatically adds
+to the NordVPN allowlist.
 
-* `TOKEN`    - Token for NordVPN account, can be generated in the web portal
-* `TOKENFILE` - File from which to get `TOKEN`, if using [docker secrets](https://docs.docker.com/compose/compose-file/compose-file-v3/#secrets) this should be set to `/run/secrets/<secret_name>`. Thi
-* `CONNECT`  -  [country]/[server]/[country_code]/[city]/[group] or [country] [city], if none provide you will connect to  the recommended server.
-   - Provide a [country] argument to connect to a specific country. For example: Australia , Use `docker run --rm ghcr.io/bubuntux/nordvpn nordvpn countries` to get the list of countries.
-   - Provide a [server] argument to connect to a specific server. For example: jp35 , [Full List](https://nordvpn.com/servers/tools/)
-   - Provide a [country_code] argument to connect to a specific country. For example: us 
-   - Provide a [city] argument to connect to a specific city. For example: 'Hungary Budapest' , Use `docker run --rm ghcr.io/bubuntux/nordvpn nordvpn cities [country]` to get the list of cities. 
-   - Provide a [group] argument to connect to a specific servers group. For example: P2P , Use `docker run --rm ghcr.io/bubuntux/nordvpn nordvpn groups` to get the full list.
-   - --group value  Specify a server group to connect to. For example: '--group p2p us'
-* `PRE_CONNECT` - Command to execute before attempt to connect.
-* `POST_CONNECT` - Command to execute after successful connection.
-* `CYBER_SEC`  - Enable or Disable. When enabled, the CyberSec feature will automatically block suspicious websites so that no malware or other cyber threats can infect your device. Additionally, no flashy ads will come into your sight. More information on how it works: https://nordvpn.com/features/cybersec/.
-* `DNS` -   Can set up to 3 DNS servers. For example 1.1.1.1,8.8.8.8 or Disable, Setting DNS disables CyberSec.
-* `FIREWALL`  - Enable or Disable.
-* `OBFUSCATE`  - Enable or Disable. When enabled, this feature allows to bypass network traffic sensors which aim to detect usage of the protocol and log, throttle or block it (only valid when using OpenVpn).
-* `PROTOCOL`   - TCP or UDP (only valid when using OpenVPN).
-* `TECHNOLOGY` - Specify Technology to use (NordLynx by default): 
-   * OpenVPN    - Traditional connection.
-   * NordLynx   - NordVpn wireguard implementation (3x-5x times faster than OpenVPN).
-* `ALLOW_LIST` - List of domains that are going to be accessible _outside_ vpn (IE rarbg.to,yts.mx).
-* `NET_LOCAL`  - CIDR networks (IE 192.168.1.0/24), add a route to allows replies once the VPN is up.
-* `NET6_LOCAL` - CIDR IPv6 networks (IE fe00:d34d:b33f::/64), add a route to allows replies once the VPN is up.
-* `PORTS`  - Semicolon delimited list of ports to whitelist for both UDP and TCP. For example '- PORTS=9091;9095'
-* `PORT_RANGE`  - Port range to whitelist for both UDP and TCP. For example '- PORT_RANGE=9091 9095'
-* `CHECK_CONNECTION_INTERVAL`  - Time in seconds to check connection and reconnect if need it. (300 by default) For example '- CHECK_CONNECTION_INTERVAL=600'
-* `CHECK_CONNECTION_URL`  - URL for checking Internet connection. (www.google.com by default) For example '- CHECK_CONNECTION_URL=www.custom.domain'
-* `MESHNET` - Enable or Disable.
-* `ALLOWLOCAL` - Comma delimited list of Meshnet devices you will allow to access this devices local network. For example 'ALLOWLOCAL=vpn-friction5976.nord,vpn-world2962.nord'
-* `ALLOWROUTE` - Comma delimited list of Meshnet devices you will allow to route though this device. For example 'ALLOWROUTE=vpn-friction5976.nord,vpn-world2962.nord'
-* `LAN_DISCOVERY` - on or off.
+## Environment variables
 
+### Connection
 
-# Issues
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TOKEN` | – | **Required** (unless `TOKENFILE` is set). NordVPN access token. |
+| `TOKENFILE` | – | File containing the token, for example `/run/secrets/<name>` with Docker secrets. The first line is read. |
+| `CONNECT` | recommended server | Where to connect: a country (`Italy`), a country code (`it`), a city (`Italy Milan`), a server (`it123`) or a group (`Double_VPN`). Flags are passed through, for example `--group double_vpn us`. Run `nordvpn countries`, `nordvpn cities <country>` and `nordvpn groups` to see the valid values. |
+| `PROTOCOL` | `nordlynx` | `nordlynx` (WireGuard, the fastest), `openvpn_udp`, `openvpn_tcp`, or `nordwhisper` (obfuscated, for networks that block VPNs). |
+| `POST_QUANTUM` | – | `on`/`off`. Post-quantum encryption (NordLynx only). |
+| `PRE_CONNECT` | – | Shell command run before connecting. |
+| `POST_CONNECT` | – | Shell command run after a successful connection. |
 
-If you have any problems with or questions about this image, please contact me through a [GitHub issue](https://github.com/bubuntux/nordvpn/issues).
+### Features
 
-# Disclaimer 
-This project is independently developed for personal use, there is no affiliation with NordVpn or Nord Security companies,
-Nord Security companies are not responsible for and have no control over the nature, content and availability of this project.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PROTECTION` | – | `on`/`off`. Real-time protection, previously Threat Protection Lite / CyberSec. Blocks malicious sites and ads. Works only with NordVPN's own DNS servers. |
+| `DNS` | – | Up to 3 custom DNS servers, comma separated (`1.1.1.1,9.9.9.9`), or `off`. Custom DNS turns off real-time protection. |
+| `FIREWALL` | – | `on`/`off`. NordVPN's own firewall. The container kill switch stays active regardless. |
+| `LAN_DISCOVERY` | – | `on`/`off`. Allows access to private LAN ranges while connected. |
+| `MESHNET` | – | `on`/`off`. Enables [Meshnet](https://meshnet.nordvpn.com/). |
+| `ALLOWLOCAL` | – | Comma-separated Meshnet peers allowed to access this device's local network, for example `peer-one.nord,peer-two.nord`. |
+| `ALLOWROUTE` | – | Comma-separated Meshnet peers allowed to route their traffic through this device. |
+
+### Networking and kill switch
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `NET_LOCAL` | – | IPv4 CIDRs (comma or semicolon separated) allowed to reach the container and to receive replies, for example `192.168.1.0/24`. |
+| `NET6_LOCAL` | – | Same as `NET_LOCAL`, for IPv6 (`fd00:d34d:b33f::/64`). |
+| `ALLOW_LIST` | – | Domains reachable **outside** the VPN (`example.com,example.org`). They are resolved once, at startup. |
+| `PORTS` | – | Ports to allowlist for TCP and UDP, separated by `;` or `,` (`9091;9095`). |
+| `PORT_RANGE` | – | Port range to allowlist for TCP and UDP (`9091 9095`). |
+
+The Docker networks attached to the container are always allowed. Everything else can only leave
+through the tunnel.
+
+### Monitoring
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CHECK_CONNECTION_INTERVAL` | `300` | Seconds between connectivity checks. If a check fails, the daemon is restarted and the connection re-established. |
+| `CHECK_CONNECTION_URL` | `www.google.com` | URL used for the connectivity check. |
+
+A Docker `HEALTHCHECK` is built in. It verifies that the client reports `Connected` and that
+`https://api.ipify.org` is reachable. Use `depends_on: condition: service_healthy` to start dependent
+services only once the tunnel is up.
+
+## Upgrading from the 4.x image
+
+NordVPN 5.x and 6.x removed several CLI commands. The container maps the old variables to the new
+ones, so existing setups keep working, but you should migrate:
+
+| Old | New | Notes |
+| --- | --- | --- |
+| `TECHNOLOGY=NordLynx` | `PROTOCOL=nordlynx` | `set technology` no longer exists. |
+| `TECHNOLOGY=OpenVPN` + `PROTOCOL=UDP\|TCP` | `PROTOCOL=openvpn_udp` / `openvpn_tcp` | |
+| `OBFUSCATE=on` | `PROTOCOL=nordwhisper` | Obfuscated servers now use NordWhisper. |
+| `CYBER_SEC` | `PROTECTION` | Renamed to *Real-time protection*. |
+| `WHITELIST` | `ALLOW_LIST` | |
+| `NETWORK` / `NETWORK6` | `NET_LOCAL` / `NET6_LOCAL` | |
+| `CONNECT=P2P` | `CONNECT=<country>` | The P2P group is gone: all regular servers now support P2P. |
+| `CONNECT=Europe`, etc. | `CONNECT=<country>` | Regional groups were removed in 5.0. |
+
+Other changes in this release:
+
+- The `arm/v7` (32-bit) image is no longer built, because the Ubuntu base image does not support it.
+- The startup banner that printed the NordLynx private key to the logs has been removed.
+- NordVPN's own firewall now uses nftables. The container kill switch still uses iptables (legacy backend).
+
+## Useful commands
+
+```sh
+docker exec vpn nordvpn status          # connection status
+docker exec vpn nordvpn settings        # current settings
+docker exec vpn nordvpn countries       # available countries
+docker exec vpn nordvpn groups          # available server groups
+docker exec vpn nordvpn connect Germany # switch server on the fly
+docker logs -f vpn                      # container logs
+```
+
+## Troubleshooting
+
+- **`FATAL: iptables is not functional`**: the container is missing `NET_ADMIN`/`NET_RAW`. Add both capabilities.
+- **`Invalid token.`**: the token has expired or was revoked. Generate a new one in Nord Account.
+- **Services can't be reached from the LAN**: set `NET_LOCAL` to your LAN subnet and publish the ports on the `vpn` service.
+- **Slow or blocked connection**: try `PROTOCOL=nordwhisper` (restrictive networks) or `PROTOCOL=openvpn_tcp`.
+- **IPv6 leaks / errors**: if you don't use IPv6, disable it with the `net.ipv6.conf.all.disable_ipv6=1` sysctl.
+- For more detail, run `docker exec vpn nordvpn diagnostics`, which collects the logs and network information into a single file.
+
+## Building the image
+
+```sh
+docker build -t nordvpn .
+# a specific client version
+docker build --build-arg NORDVPN_VERSION=6.0.2 -t nordvpn:6.0.2 .
+# whatever version is newest in the NordVPN repository
+docker build --build-arg NORDVPN_VERSION= -t nordvpn:latest .
+```
+
+Every push to GitHub builds the images and publishes them to `ghcr.io/rionoir/nordvpn` and Docker
+Hub (`rionoir/nordvpn`), tagged with the branch name. The default branch is also tagged `latest`.
+
+## Disclaimer
+
+This project is independently developed and has no affiliation with NordVPN or Nord Security.
+Nord Security is not responsible for, and has no control over, the nature, content and availability
+of this project. Licensed under the [AGPL-3.0](LICENSE).

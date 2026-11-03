@@ -5,7 +5,10 @@ while true; do
   if [[ ! $(curl -Is -m 30 -o /dev/null -w "%{http_code}" "${CHECK_CONNECTION_URL:-www.google.com}") =~ ^[23] ]]; then
     echo "Unstable connection detected!"
     nordvpn status
-    s6-svc -wR -t /var/run/s6/services/nordvpn
+    # s6-overlay v3 keeps services in /run/service, v2 used /var/run/s6/services
+    service_dir=/run/service/nordvpn
+    [[ -d ${service_dir} ]] || service_dir=/var/run/s6/services/nordvpn
+    s6-svc -wR -t "${service_dir}"
     if ! nord_connect ; then
       echo "Unable to connect"
       exit 1

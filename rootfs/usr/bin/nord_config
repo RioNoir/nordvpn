@@ -1,50 +1,73 @@
 #!/usr/bin/with-contenv bash
 
-nordvpn set technology ${TECHNOLOGY:-NordLynx}
+# --- VPN protocol -------------------------------------------------------------
+# Since NordVPN 6.0 "set technology" and "set obfuscate" are gone: a single
+# "set protocol" selects nordlynx | openvpn_udp | openvpn_tcp | nordwhisper.
+# TECHNOLOGY/PROTOCOL/OBFUSCATE are still accepted for backward compatibility.
+shopt -s nocasematch
+vpn_protocol=""
+case "${PROTOCOL}" in
+  nordlynx|openvpn_udp|openvpn_tcp|nordwhisper) vpn_protocol="${PROTOCOL,,}" ;;
+esac
+if [[ -z ${vpn_protocol} ]]; then
+  case "${TECHNOLOGY:-NordLynx}" in
+    nordlynx)    vpn_protocol="nordlynx" ;;
+    nordwhisper) vpn_protocol="nordwhisper" ;;
+    openvpn)     [[ ${PROTOCOL} == tcp ]] && vpn_protocol="openvpn_tcp" || vpn_protocol="openvpn_udp" ;;
+    *)           echo "WARNING: unknown TECHNOLOGY '${TECHNOLOGY}', using NordLynx" ; vpn_protocol="nordlynx" ;;
+  esac
+fi
+if [[ ${OBFUSCATE} =~ ^(1|on|true|enable|enabled)$ ]]; then
+  echo "OBFUSCATE is deprecated: obfuscation is now provided by the NordWhisper protocol."
+  vpn_protocol="nordwhisper"
+fi
+shopt -u nocasematch
+nordvpn set protocol "${vpn_protocol}"
 
+# --- Settings -----------------------------------------------------------------
 [[ -n ${DNS} ]] && nordvpn set dns ${DNS//[;,]/ }
 
-[[ -n ${CYBER_SEC} ]] && nordvpn set cybersec ${CYBER_SEC}
-[[ -n ${OBFUSCATE} ]] && nordvpn set obfuscate ${OBFUSCATE}
+# "cybersec"/"threatprotectionlite" were replaced by "protection" (Real-time protection).
+[[ -z ${PROTECTION} && -n ${CYBER_SEC} ]] && PROTECTION=${CYBER_SEC}
+[[ -n ${PROTECTION} ]] && nordvpn set protection ${PROTECTION}
+
 [[ -n ${FIREWALL} ]] && nordvpn set firewall ${FIREWALL}
+[[ -n ${POST_QUANTUM} ]] && nordvpn set post-quantum ${POST_QUANTUM}
 [[ -n ${MESHNET} ]] && nordvpn set meshnet ${MESHNET}
 [[ -n ${LAN_DISCOVERY} ]] && nordvpn set lan-discovery ${LAN_DISCOVERY}
 
-# Configue local network and routing allow list
+# --- Meshnet local network and routing permissions ----------------------------
 if [[ -n ${MESHNET} ]]; then
-  allowedLocalHosts=${ALLOWROUTE}
-  if [[ -n ${allowedLocalHosts} ]]; then
-    IFS=',' read -ra allowed <<< "$allowedLocalHosts"
+  if [[ -n ${ALLOWLOCAL} ]]; then
+    IFS=',' read -ra allowed <<< "${ALLOWLOCAL}"
     for host in "${allowed[@]}"; do
       nordvpn meshnet peer local allow "${host}"
     done
   fi
 
-  allowedRoutingHosts=${ALLOWROUTE}
-  if [[ -n ${allowedRoutingHosts} ]]; then
-    IFS=',' read -ra allowed <<< "$allowedRoutingHosts"
+  if [[ -n ${ALLOWROUTE} ]]; then
+    IFS=',' read -ra allowed <<< "${ALLOWROUTE}"
     for host in "${allowed[@]}"; do
       nordvpn meshnet peer routing allow "${host}"
     done
   fi
 fi
 
-#[[ -n ${KILLSWITCH} ]] && nordvpn set killswitch ${KILLSWITCH} Killswitch is enabled by default using iptables
+# Kill switch is provided by the container itself through iptables (see /etc/cont-init.d/00-firewall)
 
-[[ -n ${PROTOCOL} ]] && nordvpn set protocol ${PROTOCOL}
-
-[[ -n ${PORTS} ]] && for port in ${PORTS//[;,]/ }; do nordvpn whitelist add port "${port}"; done
-[[ -n ${PORT_RANGE} ]] && nordvpn whitelist add ports ${PORT_RANGE}
+# --- Allowlist ----------------------------------------------------------------
+[[ -n ${PORTS} ]] && for port in ${PORTS//[;,]/ }; do nordvpn allowlist add port "${port}"; done
+[[ -n ${PORT_RANGE} ]] && nordvpn allowlist add ports ${PORT_RANGE}
 
 docker_networks=$(dockerNetworks)
 if [[ -n ${docker_networks} ]]; then
   IFS=',' read -ra networks <<< "$docker_networks"
   for net in "${networks[@]}"; do
     network=($net)
-    nordvpn whitelist add subnet "${network[1]}"
+    nordvpn allowlist add subnet "${network[1]}"
   done
 fi
 [[ -n ${NETWORK} && -z ${NET_LOCAL} ]] && NET_LOCAL=${NETWORK}
-[[ -n ${NET_LOCAL} ]] && for net in ${NET_LOCAL//[;,]/ }; do nordvpn whitelist add subnet "${net}"; done
+[[ -n ${NET_LOCAL} ]] && for net in ${NET_LOCAL//[;,]/ }; do nordvpn allowlist add subnet "${net}"; done
 
 exit 0

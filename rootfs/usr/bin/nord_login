@@ -19,10 +19,12 @@ while [ ! -S /run/nordvpn/nordvpnd.sock ] ; do
 done
 
 [[ -z "${TOKEN}" ]] && [[ -f "${TOKENFILE}" ]] && TOKEN="$(head -n 1 "${TOKENFILE}")"
-nordvpn logout --persist-token > /dev/null
+# Since 6.0 logout keeps the token valid unless --revoke-token is passed
+nordvpn logout > /dev/null 2>&1
 
 if [[ -n ${TOKEN} ]]; then
-  # Handle analytics consent prompt for NordVPN 4.0.0+
+  # Decline analytics up front; the piped "n" answers the consent prompt if it still shows up
+  nordvpn set analytics off > /dev/null 2>&1
   echo "n" | nordvpn login --token "${TOKEN}" || {
     echo "Invalid token."
     exit 1
