@@ -1,3 +1,16 @@
+# --- gluetun compatible control server ------------------------------------------
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS control-server
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev COMMIT=unknown CREATED=unknown
+WORKDIR /src
+COPY control-server/go.mod control-server/go.sum ./
+RUN go mod download
+COPY control-server/ ./
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.created=${CREATED}" \
+      -o /out/control-server .
+
+# --- NordVPN image --------------------------------------------------------------
 FROM ghcr.io/linuxserver/baseimage-ubuntu:resolute
 
 LABEL org.opencontainers.image.title="nordvpn" \
@@ -27,12 +40,15 @@ RUN apt-get update -y && \
 		/var/tmp/*
 
 COPY /rootfs /
-RUN chmod +x /etc/cont-init.d/* /etc/services.d/nordvpn/* \
+COPY --from=control-server /out/control-server /usr/bin/control-server
+RUN chmod +x /etc/cont-init.d/* /etc/services.d/nordvpn/* /etc/services.d/control-server/run \
     /usr/bin/dockerNetworks /usr/bin/dockerNetworks6 /usr/bin/nord_config /usr/bin/nord_connect /usr/bin/nord_login /usr/bin/nord_watch \
     /etc/services.d/nordvpn/data/check /usr/bin/healthcheck
 
-HEALTHCHECK --interval=60s --timeout=15s --start-period=120s \
+HEALTHCHECK --interval=60s --timeout=30s --start-period=120s \
             CMD /usr/bin/healthcheck
+
+EXPOSE 8000/tcp
 
 ENV S6_CMD_WAIT_FOR_SERVICES=1
 CMD nord_login && nord_config && nord_connect && nord_watch

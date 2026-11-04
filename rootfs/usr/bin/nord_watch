@@ -2,6 +2,8 @@
 
 while true; do
   sleep "${CHECK_CONNECTION_INTERVAL:-300}"
+  # VPN stopped on purpose through the control server API: don't reconnect
+  [[ -f /run/nordvpn-control/stopped ]] && continue
   if [[ ! $(curl -Is -m 30 -o /dev/null -w "%{http_code}" "${CHECK_CONNECTION_URL:-www.google.com}") =~ ^[23] ]]; then
     echo "Unstable connection detected!"
     nordvpn status

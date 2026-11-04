@@ -27,6 +27,7 @@ iptables **kill switch** blocks everything else, even before the tunnel is up.
 - [Quick start](#quick-start)
 - [Docker Compose](#docker-compose)
 - [Environment variables](#environment-variables)
+- [Control server API](#control-server-api)
 - [Upgrading from the 4.x image](#upgrading-from-the-4x-image)
 - [Useful commands](#useful-commands)
 - [Troubleshooting](#troubleshooting)
@@ -211,10 +212,115 @@ through the tunnel.
 | --- | --- | --- |
 | `CHECK_CONNECTION_INTERVAL` | `300` | Seconds between connectivity checks. If a check fails, the daemon is restarted and the connection re-established. |
 | `CHECK_CONNECTION_URL` | `www.google.com` | URL used for the connectivity check. |
+| `HEALTH_TARGET_URL` | `https://api.ipify.org` | URL the healthcheck falls back to when the NordVPN API is unreachable. |
 
-A Docker `HEALTHCHECK` is built in. It verifies that the client reports `Connected` and that
-`https://api.ipify.org` is reachable. Use `depends_on: condition: service_healthy` to start dependent
-services only once the tunnel is up.
+#### Healthcheck
+
+A Docker `HEALTHCHECK` is built in and runs every 60 seconds. The container is healthy when:
+
+1. the client reports `Status: Connected`, and
+2. NordVPN's API confirms that the traffic is leaving through its network (`"protected": true`).
+   If that API can't be reached, the check falls back to fetching `HEALTH_TARGET_URL`.
+
+The reason for the last result is shown by:
+
+```sh
+docker inspect --format '{{json .State.Health}}' vpn
+```
+
+Use `depends_on: { vpn: { condition: service_healthy } }` to start dependent services only once the
+tunnel is up. While the VPN is stopped through the API, the container reports itself unhealthy.
+
+### Control server
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `HTTP_CONTROL_SERVER_ENABLED` | `on` | `off` disables the HTTP API. |
+| `HTTP_CONTROL_SERVER_ADDRESS` | `:8000` | Listening address. |
+| `HTTP_CONTROL_SERVER_LOG` | `on` | Log every request. |
+| `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE` | – | Auth role (JSON) for every route not covered by the config file, for example `{"auth":"apikey","apikey":"..."}`. |
+| `HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH` | `/gluetun/auth/config.toml` | Path of the optional per-route auth file. |
+| `PUBLICIP_ENABLED` | `on` | `off` disables the public IP lookup. |
+| `PUBLICIP_API` | `nordvpn` | Lookup service: `nordvpn` (no limits, adds `protected`) or `ipinfo` (adds `hostname` and `timezone`). |
+| `PUBLICIP_API_TOKEN` | – | Optional ipinfo.io token, to raise its rate limit. |
+
+## Control server API
+
+The container runs an HTTP API on port **8000** that follows the
+[gluetun control server](https://github.com/qdm12/gluetun-wiki/blob/main/setup/advanced/control-server.md).
+Tools and dashboard widgets written for gluetun, such as the Homepage widget, work unchanged.
+
+### Authentication
+
+Like gluetun, **every route requires authentication**. Until you configure a role, all requests are
+answered with `401`. The quickest setup is an API key for every route:
+
+```yaml
+    environment:
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"apikey","apikey":"change-me-to-a-long-random-key"}
+    ports:
+      - 8000:8000
+```
+
+```sh
+curl -H "X-API-Key: change-me-to-a-long-random-key" http://localhost:8000/v1/publicip/ip
+```
+
+Available methods: `apikey` (`X-API-Key` header), `basic` (HTTP basic auth, with `username` and
+`password`) and `none`. For per-route permissions, mount a `config.toml` at
+`/gluetun/auth/config.toml`, in the same format gluetun uses:
+
+```toml
+[[roles]]
+name = "homepage"
+routes = ["GET /v1/publicip/ip", "GET /v1/vpn/status"]
+auth = "none"
+
+[[roles]]
+name = "admin"
+routes = ["PUT /v1/vpn/status"]
+auth = "basic"
+username = "admin"
+password = "change-me"
+```
+
+Routes listed in the file use the roles defined there. Every other route falls back to
+`HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE`. To reach the API from your LAN, add your network to
+`NET_LOCAL`, as you would for any other published port. Don't expose it to the internet without a
+TLS reverse proxy in front.
+
+### Routes
+
+| Method | Route | Response |
+| --- | --- | --- |
+| `GET` | `/v1/publicip/ip` | `{"public_ip":"185.x.x.x","region":"MI","country":"Italy","city":"Milan","location":"45.4643,9.1895","organization":"AS136787 Packethub S.A.","postal_code":"20121","protected":true}` |
+| `GET` | `/v1/vpn/status` | `{"status":"running"}`. Possible values: `running`, `starting`, `stopping`, `stopped`, `crashed`. |
+| `PUT` | `/v1/vpn/status` | Body `{"status":"stopped"}` or `{"status":"running"}`, reply `{"outcome":"stopped"}`. A VPN stopped this way stays down, with the kill switch still blocking traffic, until it is started again. |
+| `GET` | `/v1/vpn/settings` | NordVPN settings as JSON (`vpn_protocol`, `kill_switch`, `dns`, `allowlisted_subnets`, …). |
+| `GET` | `/v1/portforward` | `{"port":0}`. NordVPN doesn't provide port forwarding on regular servers. |
+| `GET` | `/v1/version` | `{"version":"master","commit":"…","created":"…","nordvpn_version":"6.0.2"}` |
+| `GET` | `/v1/nordvpn/status` | Full `nordvpn status` output as JSON: `server`, `hostname`, `ip`, `country`, `city`, `vpn_protocol`, `transfer`, `uptime`, … |
+| `GET` | `/v1/nordvpn/settings` | Same as `/v1/vpn/settings`. |
+| `GET` | `/v1/nordvpn/account` | Account information, including email and subscription expiry. Protect this route carefully. |
+
+For compatibility, the server also answers the older gluetun routes: `/v1/openvpn/status`,
+`/v1/openvpn/settings`, `/v1/openvpn/portforwarded`, `/openvpn/portforwarded`, `/openvpn/settings` and
+`/openvpn/actions/restart`. Routes for features that NordVPN manages internally answer with fixed
+values (`GET /v1/dns/status` returns `running`, `GET /v1/updater/status` returns `completed`), and
+the corresponding `PUT` routes return `501 Not Implemented`.
+
+The public IP is only looked up while the VPN is connected, so the lookup can never reveal your
+real address. It is cached until the server changes, or for at most one hour.
+
+### Homepage widget
+
+```yaml
+- VPN:
+    widget:
+      type: gluetun
+      url: http://vpn:8000
+      key: change-me-to-a-long-random-key
+```
 
 ## Upgrading from the 4.x image
 

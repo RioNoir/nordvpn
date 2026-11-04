@@ -1,17 +1,35 @@
 #!/bin/bash
 
-# NordVPN Container Healthcheck
-# Exit 0 = healthy, Exit 1 = unhealthy
+# NordVPN container healthcheck. Exit 0 = healthy, exit 1 = unhealthy.
+# The message printed is shown by "docker inspect --format '{{json .State.Health}}' <container>".
 
-# Check if NordVPN daemon is running and VPN is connected
-if ! nordvpn status | grep -q "Status: Connected"; then
-    exit 1
+unhealthy() {
+  echo "unhealthy: $*"
+  exit 1
+}
+
+if [[ -f /run/nordvpn-control/stopped ]]; then
+  unhealthy "VPN stopped through the control server API"
 fi
 
-# Check internet connectivity through VPN
-if ! curl -LSs --max-time 10 'https://api.ipify.org' >/dev/null; then
-    exit 1
+status=$(nordvpn status 2>&1)
+if ! grep -q "Status: Connected" <<< "${status}"; then
+  unhealthy "VPN not connected ($(grep -m1 'Status:' <<< "${status}" || echo 'daemon not responding'))"
 fi
 
-# All checks passed
-exit 0
+# Ask NordVPN whether the traffic is really leaving through its network.
+if insights=$(curl -fsS --max-time 10 'https://api.nordvpn.com/v1/helpers/ips/insights' 2>&1); then
+  if grep -q '"protected":true' <<< "${insights}"; then
+    echo "healthy: $(grep -m1 'Hostname:' <<< "${status}")"
+    exit 0
+  fi
+  unhealthy "traffic is not protected by NordVPN"
+fi
+
+# NordVPN API unreachable: fall back to a plain connectivity check.
+if curl -fsS --max-time 10 -o /dev/null "${HEALTH_TARGET_URL:-https://api.ipify.org}"; then
+  echo "healthy: connected, NordVPN API unreachable"
+  exit 0
+fi
+
+unhealthy "no internet connectivity through the VPN"

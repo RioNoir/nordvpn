@@ -5,3 +5,14 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+  # Go dependencies of the control server
+  - package-ecosystem: "gomod"
+    directory: "/control-server"
+    schedule:
+      interval: "weekly"
+
+  # Base images in the Dockerfile
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

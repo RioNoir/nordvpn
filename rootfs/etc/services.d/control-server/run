@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bash
+
+# gluetun compatible HTTP control server, see README "Control server API"
+if [[ ${HTTP_CONTROL_SERVER_ENABLED:-on} =~ ^(0|off|false|no|disable|disabled)$ ]]; then
+  echo "[control-server] disabled"
+  s6-svc -O .   # run once: do not restart after this script exits
+  exit 0
+fi
+
+exec /usr/bin/control-server
