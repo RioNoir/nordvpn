@@ -1,0 +1,26 @@
+#!/usr/bin/with-contenv bash
+
+# Container entrypoint (CMD): login, configure, connect, then keep watching.
+
+if [[ -z ${NO_COLOR} ]]; then
+  BOLD=$'\e[1m'; RESET=$'\e[0m'
+fi
+
+step() {
+  local title="── ${1} "
+  printf '\n%s%s%s\n' "${BOLD}" "${title}$(printf '─%.0s' $(seq 1 $((67 - ${#title}))))" "${RESET}"
+}
+
+step "NordVPN client $(dpkg-query -W -f='${Version}' nordvpn 2>/dev/null)"
+
+step "Login"
+nord_login || exit 1
+
+step "Configuration"
+nord_config || exit 1
+
+step "Connection"
+nord_connect || exit 1
+
+step "Watching the connection every ${CHECK_CONNECTION_INTERVAL:-300}s"
+exec nord_watch

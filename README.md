@@ -212,6 +212,7 @@ through the tunnel.
 | --- | --- | --- |
 | `CHECK_CONNECTION_INTERVAL` | `300` | Seconds between connectivity checks. If a check fails, the daemon is restarted and the connection re-established. |
 | `CHECK_CONNECTION_URL` | `www.google.com` | URL used for the connectivity check. |
+| `NO_COLOR` | – | Set to any value to disable colors in the container logs. |
 | `HEALTH_TARGET_URL` | `https://api.ipify.org` | URL the healthcheck falls back to when the NordVPN API is unreachable. |
 
 #### Healthcheck
@@ -235,11 +236,10 @@ tunnel is up. While the VPN is stopped through the API, the container reports it
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HTTP_CONTROL_SERVER_ENABLED` | `on` | `off` disables the HTTP API. |
-| `HTTP_CONTROL_SERVER_ADDRESS` | `:8000` | Listening address. |
-| `HTTP_CONTROL_SERVER_LOG` | `on` | Log every request. |
-| `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE` | – | Auth role (JSON) for every route not covered by the config file, for example `{"auth":"apikey","apikey":"..."}`. |
-| `HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH` | `/gluetun/auth/config.toml` | Path of the optional per-route auth file. |
+| `CONTROL_API_KEY` | – | API key for the control server. The API is **disabled** while it is empty. |
+| `CONTROL_API_KEY_FILE` | – | File containing the API key, for example `/run/secrets/<name>` with Docker secrets. |
+| `CONTROL_API_PORT` | `8000` | Port the control server listens on. |
+| `CONTROL_API_LOG` | `on` | Log every request. |
 | `PUBLICIP_ENABLED` | `on` | `off` disables the public IP lookup. |
 | `PUBLICIP_API` | `nordvpn` | Lookup service: `nordvpn` (no limits, adds `protected`) or `ipinfo` (adds `hostname` and `timezone`). |
 | `PUBLICIP_API_TOKEN` | – | Optional ipinfo.io token, to raise its rate limit. |
@@ -252,12 +252,13 @@ Tools and dashboard widgets written for gluetun, such as the Homepage widget, wo
 
 ### Authentication
 
-Like gluetun, **every route requires authentication**. Until you configure a role, all requests are
-answered with `401`. The quickest setup is an API key for every route:
+The API is enabled only when an API key is set, and every request has to carry it in the
+`X-API-Key` header, the same header gluetun uses. Generate a long random key, for example with
+`openssl rand -hex 24`:
 
 ```yaml
     environment:
-      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"apikey","apikey":"change-me-to-a-long-random-key"}
+      - CONTROL_API_KEY=change-me-to-a-long-random-key
     ports:
       - 8000:8000
 ```
@@ -266,28 +267,9 @@ answered with `401`. The quickest setup is an API key for every route:
 curl -H "X-API-Key: change-me-to-a-long-random-key" http://localhost:8000/v1/publicip/ip
 ```
 
-Available methods: `apikey` (`X-API-Key` header), `basic` (HTTP basic auth, with `username` and
-`password`) and `none`. For per-route permissions, mount a `config.toml` at
-`/gluetun/auth/config.toml`, in the same format gluetun uses:
-
-```toml
-[[roles]]
-name = "homepage"
-routes = ["GET /v1/publicip/ip", "GET /v1/vpn/status"]
-auth = "none"
-
-[[roles]]
-name = "admin"
-routes = ["PUT /v1/vpn/status"]
-auth = "basic"
-username = "admin"
-password = "change-me"
-```
-
-Routes listed in the file use the roles defined there. Every other route falls back to
-`HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE`. To reach the API from your LAN, add your network to
-`NET_LOCAL`, as you would for any other published port. Don't expose it to the internet without a
-TLS reverse proxy in front.
+Requests without the key, or with a wrong one, get `401 Unauthorized`. To reach the API from your
+LAN, add your network to `NET_LOCAL`, as you would for any other published port. Don't expose it
+to the internet without a TLS reverse proxy in front.
 
 ### Routes
 
@@ -347,6 +329,7 @@ Other changes in this release:
 ## Useful commands
 
 ```sh
+docker exec vpn nord_info               # connection summary: server, city, public IP, protocol, …
 docker exec vpn nordvpn status          # connection status
 docker exec vpn nordvpn settings        # current settings
 docker exec vpn nordvpn countries       # available countries
@@ -358,7 +341,9 @@ docker logs -f vpn                      # container logs
 ## Troubleshooting
 
 - **`FATAL: iptables is not functional`**: the container is missing `NET_ADMIN`/`NET_RAW`. Add both capabilities.
-- **`Invalid token.`**: the token has expired or was revoked. Generate a new one in Nord Account.
+- **`the token was rejected`**: the token has expired or was revoked. Generate a new one in Nord Account.
+- **`unable to log in to NordVPN`**: the container prints the last lines of the NordVPN daemon log.
+  For the full log, run `docker exec vpn tail -n 200 /var/log/nordvpn/daemon.log`.
 - **Services can't be reached from the LAN**: set `NET_LOCAL` to your LAN subnet and publish the ports on the `vpn` service.
 - **Slow or blocked connection**: try `PROTOCOL=nordwhisper` (restrictive networks) or `PROTOCOL=openvpn_tcp`.
 - **IPv6 leaks / errors**: if you don't use IPv6, disable it with the `net.ipv6.conf.all.disable_ipv6=1` sysctl.

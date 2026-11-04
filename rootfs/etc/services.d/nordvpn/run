@@ -4,4 +4,12 @@ if [[ ! -d /run/nordvpn ]]; then
   mkdir -m 0770 /run/nordvpn
 fi
 
-exec s6-notifyoncheck -n 60 -d /usr/sbin/nordvpnd > /dev/null
+# Keep the daemon output in a file instead of discarding it: it is the only
+# place where errors such as a failed login or consent are reported.
+mkdir -p /var/log/nordvpn
+# Keep the log across daemon restarts, but don't let it grow forever.
+if [[ $(stat -c %s /var/log/nordvpn/daemon.log 2>/dev/null || echo 0) -gt 5242880 ]]; then
+  mv -f /var/log/nordvpn/daemon.log /var/log/nordvpn/daemon.log.1
+fi
+
+exec s6-notifyoncheck -n 60 -d /usr/sbin/nordvpnd >> /var/log/nordvpn/daemon.log 2>&1

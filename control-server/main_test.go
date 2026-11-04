@@ -37,118 +37,58 @@ func TestParseKeyValues(t *testing.T) {
 	}
 }
 
-func serve(t *testing.T, settings authSettings, request *http.Request) *httptest.ResponseRecorder {
+func serve(t *testing.T, request *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler, err := newAuthMiddleware(settings, ok)
-	if err != nil {
-		t.Fatal(err)
-	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	newAuthMiddleware("secret-key-1234567890", ok).ServeHTTP(recorder, request)
 	return recorder
 }
 
-func TestAuthNoRoleDeniesEverything(t *testing.T) {
-	settings, err := loadAuthSettings(filepath.Join(t.TempDir(), "missing.toml"), "")
-	if err != nil {
-		t.Fatal(err)
+func TestAuthAPIKey(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		key    string
+		want   int
+	}{
+		{"no key", http.MethodGet, "/v1/vpn/status", "", http.StatusUnauthorized},
+		{"wrong key", http.MethodGet, "/v1/vpn/status", "wrong", http.StatusUnauthorized},
+		{"right key", http.MethodGet, "/v1/vpn/status", "secret-key-1234567890", http.StatusOK},
+		{"right key, PUT", http.MethodPut, "/v1/vpn/status", "secret-key-1234567890", http.StatusOK},
+		{"trailing slash", http.MethodGet, "/v1/publicip/ip/", "secret-key-1234567890", http.StatusOK},
+		{"unknown route", http.MethodGet, "/nope", "secret-key-1234567890", http.StatusNotFound},
+		{"bad method", http.MethodDelete, "/v1/vpn/status", "secret-key-1234567890", http.StatusMethodNotAllowed},
 	}
-	got := serve(t, settings, httptest.NewRequest(http.MethodGet, "/v1/publicip/ip", nil))
-	if got.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", got.Code)
-	}
-}
-
-func TestAuthAPIKeyDefaultRole(t *testing.T) {
-	settings, err := loadAuthSettings("/nonexistent", `{"auth":"apikey","apikey":"secret"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	request := httptest.NewRequest(http.MethodGet, "/v1/vpn/status", nil)
-	if got := serve(t, settings, request); got.Code != http.StatusUnauthorized {
-		t.Fatalf("without key: got %d, want 401", got.Code)
-	}
-	request.Header.Set("X-API-Key", "wrong")
-	if got := serve(t, settings, request); got.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong key: got %d, want 401", got.Code)
-	}
-	request.Header.Set("X-API-Key", "secret")
-	if got := serve(t, settings, request); got.Code != http.StatusOK {
-		t.Fatalf("right key: got %d, want 200", got.Code)
-	}
-	trailing := httptest.NewRequest(http.MethodGet, "/v1/vpn/status/", nil)
-	trailing.Header.Set("X-API-Key", "secret")
-	if got := serve(t, settings, trailing); got.Code != http.StatusOK {
-		t.Fatalf("trailing slash: got %d, want 200", got.Code)
-	}
-	if got := serve(t, settings, httptest.NewRequest(http.MethodGet, "/nope", nil)); got.Code != http.StatusNotFound {
-		t.Fatalf("unknown route: got %d, want 404", got.Code)
-	}
-	if got := serve(t, settings, httptest.NewRequest(http.MethodDelete, "/v1/vpn/status", nil)); got.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("bad method: got %d, want 405", got.Code)
-	}
-}
-
-func TestAuthConfigFileTakesPrecedence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	config := `
-[[roles]]
-name = "homepage"
-routes = ["GET /v1/publicip/ip"]
-auth = "none"
-
-[[roles]]
-name = "admin"
-routes = ["PUT /v1/vpn/status"]
-auth = "basic"
-username = "admin"
-password = "pw"
-`
-	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings, err := loadAuthSettings(path, `{"auth":"apikey","apikey":"secret"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got := serve(t, settings, httptest.NewRequest(http.MethodGet, "/v1/publicip/ip", nil)); got.Code != http.StatusOK {
-		t.Fatalf("public route: got %d, want 200", got.Code)
-	}
-
-	put := httptest.NewRequest(http.MethodPut, "/v1/vpn/status", nil)
-	put.Header.Set("X-API-Key", "secret")
-	got := serve(t, settings, put)
-	if got.Code != http.StatusUnauthorized {
-		t.Fatalf("api key on basic-only route: got %d, want 401", got.Code)
-	}
-	if got.Header().Get("WWW-Authenticate") == "" {
-		t.Fatal("missing WWW-Authenticate header")
-	}
-	put.SetBasicAuth("admin", "pw")
-	if got := serve(t, settings, put); got.Code != http.StatusOK {
-		t.Fatalf("basic auth: got %d, want 200", got.Code)
-	}
-
-	status := httptest.NewRequest(http.MethodGet, "/v1/vpn/status", nil)
-	status.Header.Set("X-API-Key", "secret")
-	if got := serve(t, settings, status); got.Code != http.StatusOK {
-		t.Fatalf("default role route: got %d, want 200", got.Code)
-	}
-}
-
-func TestAuthInvalidConfig(t *testing.T) {
-	cases := map[string]string{
-		"unknown method": `{"auth":"oauth"}`,
-		"empty api key":  `{"auth":"apikey"}`,
-		"unknown field":  `{"auth":"none","foo":1}`,
-	}
-	for name, role := range cases {
-		if _, err := loadAuthSettings("/nonexistent", role); err == nil {
-			t.Errorf("%s: expected an error", name)
+	for _, c := range cases {
+		request := httptest.NewRequest(c.method, c.path, nil)
+		if c.key != "" {
+			request.Header.Set("X-API-Key", c.key)
 		}
+		if got := serve(t, request).Code; got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestLoadAPIKey(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(file, []byte("  from-file  \nsecond line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if key, err := loadAPIKey(" from-env ", file); err != nil || key != "from-env" {
+		t.Errorf("env takes precedence: got %q, %v", key, err)
+	}
+	if key, err := loadAPIKey("", file); err != nil || key != "from-file" {
+		t.Errorf("from file: got %q, %v", key, err)
+	}
+	if _, err := loadAPIKey("", ""); err == nil {
+		t.Error("no key: expected an error")
+	}
+	if _, err := loadAPIKey("", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("missing file: expected an error")
 	}
 }
 

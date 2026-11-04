@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -24,22 +26,15 @@ var (
 func main() {
 	logger := log.New(os.Stdout, "[control-server] ", 0)
 
-	address := envOr("HTTP_CONTROL_SERVER_ADDRESS", ":8000")
-	logRequests := envBool("HTTP_CONTROL_SERVER_LOG", true)
+	address := ":" + envOr("CONTROL_API_PORT", "8000")
+	logRequests := envBool("CONTROL_API_LOG", true)
 
-	authSettings, err := loadAuthSettings(
-		envOr("HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH", "/gluetun/auth/config.toml"),
-		os.Getenv("HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE"),
-	)
+	apiKey, err := loadAPIKey(os.Getenv("CONTROL_API_KEY"), os.Getenv("CONTROL_API_KEY_FILE"))
 	if err != nil {
-		logger.Fatalf("loading authentication settings: %s", err)
+		logger.Fatal(err)
 	}
-	if len(authSettings.Roles) == 0 {
-		logger.Println("WARNING: no authentication role configured, every route will answer 401. " +
-			"Set HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE, for example {\"auth\":\"apikey\",\"apikey\":\"...\"}")
-	}
-	for _, role := range authSettings.Roles {
-		logger.Printf("role %q: auth %s, %d routes", role.Name, role.Auth, len(role.Routes))
+	if len(apiKey) < minAPIKeyLength {
+		logger.Printf("WARNING: CONTROL_API_KEY is shorter than %d characters, use a longer random key", minAPIKeyLength)
 	}
 
 	vpn := newVPN(logger)
@@ -49,11 +44,7 @@ func main() {
 		os.Getenv("PUBLICIP_API_TOKEN"),
 	)
 
-	var handler http.Handler = newRouter(logger, vpn, publicIP)
-	handler, err = newAuthMiddleware(authSettings, handler)
-	if err != nil {
-		logger.Fatalf("creating authentication middleware: %s", err)
-	}
+	handler := newAuthMiddleware(apiKey, newRouter(logger, vpn, publicIP))
 	if logRequests {
 		handler = logMiddleware(logger, handler)
 	}
@@ -77,6 +68,26 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Fatalf("http server: %s", err)
 	}
+}
+
+const minAPIKeyLength = 16
+
+// loadAPIKey returns CONTROL_API_KEY, or the first line of CONTROL_API_KEY_FILE
+// (for Docker secrets) when the variable is empty.
+func loadAPIKey(key, keyFile string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" && keyFile != "" {
+		data, err := os.ReadFile(keyFile)
+		if err != nil {
+			return "", fmt.Errorf("reading CONTROL_API_KEY_FILE: %w", err)
+		}
+		key, _, _ = strings.Cut(string(data), "\n")
+		key = strings.TrimSpace(key)
+	}
+	if key == "" {
+		return "", errors.New("no API key: set CONTROL_API_KEY or CONTROL_API_KEY_FILE")
+	}
+	return key, nil
 }
 
 func envOr(key, fallback string) string {

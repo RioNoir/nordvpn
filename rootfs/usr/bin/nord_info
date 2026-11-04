@@ -1,0 +1,74 @@
+#!/usr/bin/with-contenv bash
+
+# Prints a summary of the VPN connection. Called after every (re)connection,
+# can also be run by hand: docker exec vpn nord_info
+
+if [[ -z ${NO_COLOR} ]]; then
+  GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; DIM=$'\e[2m'; RESET=$'\e[0m'
+else
+  GREEN=""; RED=""; YELLOW=""; BOLD=""; DIM=""; RESET=""
+fi
+LINE="───────────────────────────────────────────────────────────────────"
+
+status=$(nordvpn status 2>/dev/null | tr -d '\r' | sed 's/^[-\\|/ ]*//')
+
+# field "Label" -> value from "nordvpn status", empty if missing
+field() {
+  awk -F': ' -v key="$1" 'tolower($1) == tolower(key) { sub(/^[^:]*: /, ""); print; exit }' <<< "${status}"
+}
+row() {
+  printf '  %-14s %s\n' "$1" "${2:--}"
+}
+
+state=$(field "Status")
+server=$(field "Server")
+hostname=$(field "Hostname")
+city=$(field "City")
+country=$(field "Country")
+protocol=$(field "VPN protocol")
+[[ -z ${protocol} ]] && protocol=$(field "Current technology")
+uptime=$(field "Uptime")
+
+echo "${LINE}"
+if [[ ${state,,} == "connected" ]]; then
+  echo "  ${BOLD}${GREEN}● VPN CONNECTED${RESET}"
+else
+  label=${state:-not running}
+  echo "  ${BOLD}${RED}● VPN ${label^^}${RESET}"
+fi
+echo "${LINE}"
+
+row "Status" "${state}"
+if [[ ${state,,} == "connected" ]]; then
+  # Public IP as seen from the internet, through the tunnel.
+  insights=$(curl -fsS --max-time 8 https://api.nordvpn.com/v1/helpers/ips/insights 2>/dev/null)
+  public_ip=$(grep -oE '"ip":"[^"]*"' <<< "${insights}" | cut -d'"' -f4)
+  if grep -q '"protected":true' <<< "${insights}"; then
+    protected="${GREEN}yes${RESET}"
+  elif [[ -n ${insights} ]]; then
+    protected="${RED}NO${RESET}"
+  else
+    protected="${YELLOW}unknown${RESET}"
+  fi
+
+  row "Server" "${server}${hostname:+ ${DIM}(${hostname})${RESET}}"
+  row "Location" "${city:+${city}, }${country}"
+  row "Public IP" "${public_ip}"
+  row "Protected" "${protected}"
+  row "Protocol" "${protocol}"
+  row "Uptime" "${uptime}"
+fi
+
+echo "${LINE}"
+row "Kill switch" "${GREEN}active${RESET} ${DIM}(iptables, everything outside the tunnel is blocked)${RESET}"
+local_nets=${NET_LOCAL:-${NETWORK}}
+row "Local access" "${local_nets//[;,]/ }"
+[[ -n ${ALLOW_LIST:-${WHITELIST}} ]] && row "Allow list" "${ALLOW_LIST:-${WHITELIST}}"
+[[ -n ${PORTS}${PORT_RANGE} ]] && row "Open ports" "${PORTS//[;,]/ }${PORT_RANGE:+ ${PORT_RANGE// /-}}"
+
+if [[ -n ${CONTROL_API_KEY}${CONTROL_API_KEY_FILE} ]]; then
+  row "Control API" "port ${CONTROL_API_PORT:-8000} ${DIM}(X-API-Key header)${RESET}"
+else
+  row "Control API" "${DIM}disabled (set CONTROL_API_KEY to enable it)${RESET}"
+fi
+echo "${LINE}"

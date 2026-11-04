@@ -2,18 +2,27 @@
 
 [[ -n ${PRE_CONNECT} ]] && eval ${PRE_CONNECT}
 
-echo "Connecting..."
+echo "Connecting to ${CONNECT:-the recommended server}..."
 current_sleep=1
-until nordvpn connect ${CONNECT}; do
+until output=$(nordvpn connect ${CONNECT} 2>&1); do
+  echo "${output}" | tail -n 2
+  # Retrying is pointless without a session: log in again first.
+  if grep -qi "not logged in" <<< "${output}"; then
+    echo "The NordVPN session is gone, logging in again..."
+    nord_login || exit 1
+  fi
   if [ ${current_sleep} -gt 4096 ]; then
     echo "Unable to connect."
     exit 1
   fi
-  echo "Unable to connect retrying in ${current_sleep} seconds."
+  echo "Unable to connect, retrying in ${current_sleep} seconds."
   sleep ${current_sleep}
   current_sleep=$((current_sleep * 2))
 done
+echo "${output}" | tail -n 1
 
 [[ -n ${POST_CONNECT} ]] && eval ${POST_CONNECT}
+
+nord_info
 
 exit 0
