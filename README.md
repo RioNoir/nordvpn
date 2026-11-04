@@ -268,8 +268,8 @@ docker build --build-arg NORDVPN_VERSION=6.0.2 -t nordvpn:6.0.2 .
 docker build --build-arg NORDVPN_VERSION= -t nordvpn:latest .
 ```
 
-Every push to GitHub builds the images and publishes them to `ghcr.io/rionoir/nordvpn` and Docker
-Hub (`rionoir/nordvpn`), tagged with the branch name. The default branch is also tagged `latest`.
+Every push to GitHub builds the images and publishes them to `ghcr.io/rionoir/nordvpn`, tagged with
+the branch name. The default branch is also tagged `latest`.
 
 ## Disclaimer
 
